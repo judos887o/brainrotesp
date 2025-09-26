@@ -1,0 +1,307 @@
+-- Brainrot ESP (standalone, event-driven, low overhead)
+-- Toggle: F6, Unload: Shift+F6
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+
+-- ===================== Config =====================
+local CFG = {
+	RootCandidates = {"Plots"},   -- Pfad unter workspace; erster Treffer wird benutzt
+	LabelName = "generation",     -- TextLabel-Name (case-insensitive)
+	BillboardName = "AnimalOverhead", -- optionaler Overhead-Name (case-insensitive). Fallback: BasePart
+	MaxBillboardDistance = 10000,
+	HotkeyToggle = Enum.KeyCode.F6,
+	HotkeyUnload = {Enum.KeyCode.F6, shift=true},
+
+	HighlightColor = Color3.fromRGB(255,255,255),
+	OutlineTransparency = 0,
+	FillTransparency = 1,
+
+	TextColor = Color3.fromRGB(255,255,255),
+	TextStrokeColor = Color3.fromRGB(0,0,0),
+	TextStrokeTransparency = 0,
+	ShowSuffix = " /s",
+}
+-- ==================================================
+
+local LocalPlayer = Players.LocalPlayer
+local ROOT = workspace
+for _,name in ipairs(CFG.RootCandidates) do
+	local c = workspace:FindFirstChild(name)
+	if c then ROOT = c break end
+end
+
+local enabled = true
+local alive = true
+
+-- Instances
+local highlight = Instance.new("Highlight")
+highlight.Name = "BrainrotESP_Highlight"
+highlight.FillTransparency = CFG.FillTransparency
+highlight.OutlineTransparency = CFG.OutlineTransparency
+highlight.OutlineColor = CFG.HighlightColor
+highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+highlight.Enabled = false
+highlight.Parent = workspace
+
+local billboardHolder = Instance.new("BillboardGui")
+billboardHolder.Name = "BrainrotESP_Label"
+billboardHolder.AlwaysOnTop = true
+billboardHolder.Size = UDim2.new(0,220,0,50)
+billboardHolder.StudsOffset = Vector3.new(0,2,0)
+billboardHolder.MaxDistance = CFG.MaxBillboardDistance
+billboardHolder.Enabled = false
+billboardHolder.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+local textLabel = Instance.new("TextLabel")
+textLabel.BackgroundTransparency = 1
+textLabel.Size = UDim2.new(1,0,1,0)
+textLabel.TextScaled = true
+textLabel.Font = Enum.Font.SourceSansBold
+textLabel.TextColor3 = CFG.TextColor
+textLabel.TextStrokeColor3 = CFG.TextStrokeColor
+textLabel.TextStrokeTransparency = CFG.TextStrokeTransparency
+textLabel.Text = ""
+textLabel.Parent = billboardHolder
+
+-- State
+local espTracked = {}   -- [Model] = {label=TextLabel, value=number, overhead=BillboardGui?, connText, connLblAnc, connModelAnc}
+local labelToModel = {} -- [TextLabel] = Model
+local currentTopModel = nil
+local connAdded, connRemoving
+
+-- Utils
+local function firstBasePart(model)
+	if not model then return end
+	if model.PrimaryPart then return model.PrimaryPart end
+	for _,d in ipairs(model:GetDescendants()) do
+		if d:IsA("BasePart") then return d end
+	end
+end
+
+local function lower(s) return tostring(s or ""):lower() end
+
+local function parseNumberWithSuffix(text)
+	if not text or text=="" then return nil end
+	local s = tostring(text):lower()
+	s = s:gsub("[%s\194\160]+","")
+	s = s:gsub("[€$£¥₽₩]", "")
+	s = s:gsub("/sec",""):gsub("/s",""):gsub("persecond","")
+	s = s:gsub("prosekunde",""):gsub("persekunde","")
+	s = s:gsub(",", ".")
+	s = s:gsub("%.+$", "")
+	local suffix = (s:match("%a+$") or ""):lower()
+	local numStr = s:gsub("%a+$",""):gsub("[^%d%.%-]", "")
+	local dotCount = select(2, numStr:gsub("%.", ""))
+	if dotCount > 1 then
+		local lastDot = numStr:match(".*()%.")
+		if lastDot then
+			local left = numStr:sub(1,lastDot-1):gsub("%.","")
+			local right = numStr:sub(lastDot+1)
+			numStr = left.."."..right
+		end
+	end
+	local base = tonumber(numStr)
+	if not base then return nil end
+	local map = {
+		k=1e3, tsd=1e3, thousand=1e3, tausend=1e3,
+		m=1e6, mio=1e6, million=1e6, millionen=1e6,
+		b=1e9, bn=1e9, mrd=1e9, milliarde=1e9, milliarden=1e9,
+		t=1e12, tn=1e12, bio=1e12, billion=1e12, billionen=1e12,
+		qa=1e15, qd=1e15, brd=1e15, billiarde=1e15, billiarden=1e15,
+		qn=1e18, qi=1e18, tr=1e18, tri=1e18, trillion=1e18, trillionen=1e18,
+		sx=1e21, sp=1e24, oc=1e27, no=1e30, de=1e33,
+	}
+	return base * (map[suffix] or 1)
+end
+
+local function shortFormat(n)
+	if not n then return "?" end
+	local sign = n < 0 and "-" or ""
+	n = math.abs(n)
+	local units = {"","K","M","B","T","Qa","Qi","Sx","Sp","Oc","No","De"}
+	local i = 1
+	while n >= 1000 and i < #units do
+		n = n / 1000
+		i += 1
+	end
+	if i == 1 then
+		return sign .. tostring(math.floor(n+0.5))
+	else
+		return string.format("%s%.2f %s", sign, n, units[i])
+	end
+end
+
+local function findModelAndOverhead(label)
+	-- preferiere BillboardGui namens AnimalOverhead (case-insensitive)
+	local bb = label:FindFirstAncestorWhichIsA("BillboardGui")
+	if bb and lower(bb.Name) == lower(CFG.BillboardName) then
+		local m = bb:FindFirstAncestorOfClass("Model") or label:FindFirstAncestorOfClass("Model")
+		if m then return m, bb end
+	end
+	-- fallback: nächstes Model
+	local m = label:FindFirstAncestorOfClass("Model")
+	return m, bb
+end
+
+local function setESP(model, value, overhead)
+	if not enabled then
+		currentTopModel = nil
+		highlight.Enabled = false
+		billboardHolder.Enabled = false
+		return
+	end
+
+	if not model or not model.Parent then
+		currentTopModel = nil
+		highlight.Enabled = false
+		billboardHolder.Enabled = false
+		return
+	end
+
+	if currentTopModel ~= model then
+		currentTopModel = model
+		highlight.Adornee = model
+		highlight.Enabled = true
+	end
+
+	local adornee
+	if overhead then
+		adornee = overhead.Adornee or overhead.Parent
+	end
+	if not adornee then adornee = firstBasePart(model) end
+
+	billboardHolder.Adornee = adornee
+	billboardHolder.Enabled = (billboardHolder.Adornee ~= nil)
+	textLabel.Text = (shortFormat(value or 0) .. (CFG.ShowSuffix or ""))
+end
+
+local function updateTop()
+	local bestModel, bestValue, bestOverhead = nil, -math.huge, nil
+	for m, d in pairs(espTracked) do
+		if m and m.Parent and d.label and d.label.Parent and d.value then
+			if d.value > bestValue then
+				bestModel, bestValue, bestOverhead = m, d.value, d.overhead
+			end
+		end
+	end
+	if bestModel then setESP(bestModel, bestValue, bestOverhead) else setESP(nil,nil,nil) end
+end
+
+local function deregister(model)
+	local d = espTracked[model]
+	if not d then return end
+	if d.connText then d.connText:Disconnect() end
+	if d.connLblAnc then d.connLblAnc:Disconnect() end
+	if d.connModelAnc then d.connModelAnc:Disconnect() end
+	labelToModel[d.label] = nil
+	espTracked[model] = nil
+end
+
+local function isTargetLabel(inst)
+	return inst:IsA("TextLabel") and lower(inst.Name) == lower(CFG.LabelName)
+end
+
+local function registerLabel(label)
+	if not alive then return end
+	if not isTargetLabel(label) then return end
+	local model, overhead = findModelAndOverhead(label)
+	if not model then return end
+	if labelToModel[label] then return end
+
+	-- Wenn bereits ein Mapping für dieses Model existiert, ersetzen
+	if espTracked[model] then deregister(model) end
+
+	local data = {
+		label = label,
+		value = parseNumberWithSuffix(label.Text),
+		overhead = overhead,
+	}
+
+	data.connText = label:GetPropertyChangedSignal("Text"):Connect(function()
+		data.value = parseNumberWithSuffix(label.Text)
+		if enabled then
+			if currentTopModel == model then
+				textLabel.Text = shortFormat(data.value or 0) .. (CFG.ShowSuffix or "")
+			end
+			updateTop()
+		end
+	end)
+	data.connLblAnc = label.AncestryChanged:Connect(function()
+		if not label:IsDescendantOf(ROOT) then
+			deregister(model)
+			if enabled then updateTop() end
+		end
+	end)
+	data.connModelAnc = model.AncestryChanged:Connect(function()
+		if not model:IsDescendantOf(ROOT) then
+			deregister(model)
+			if enabled then updateTop() end
+		end
+	end)
+
+	espTracked[model] = data
+	labelToModel[label] = model
+	if enabled then updateTop() end
+end
+
+-- Start: initiale Registrierung
+for _,d in ipairs(ROOT:GetDescendants()) do
+	if isTargetLabel(d) then registerLabel(d) end
+end
+
+-- Live hooks
+connAdded = ROOT.DescendantAdded:Connect(function(inst)
+	if not alive then return end
+	if isTargetLabel(inst) then registerLabel(inst) end
+end)
+
+connRemoving = ROOT.DescendantRemoving:Connect(function(inst)
+	if not alive then return end
+	if labelToModel[inst] then
+		local m = labelToModel[inst]
+		deregister(m)
+		if enabled then updateTop() end
+	elseif inst:IsA("Model") and espTracked[inst] then
+		deregister(inst)
+		if enabled then updateTop() end
+	end
+end)
+
+-- Hotkeys
+UIS.InputBegan:Connect(function(input, gp)
+	if gp or not alive then return end
+	if input.KeyCode == CFG.HotkeyToggle then
+		enabled = not enabled
+		if not enabled then
+			highlight.Enabled = false
+			billboardHolder.Enabled = false
+		else
+			updateTop()
+		end
+	elseif input.KeyCode == CFG.HotkeyUnload and CFG.HotkeyUnload.shift == nil then
+		-- ignore; handled below when shift flag is used
+	end
+end)
+
+-- Optional: Shift + HotkeyToggle = unload
+UIS.InputBegan:Connect(function(input, gp)
+	if gp or not alive then return end
+	if input.KeyCode == CFG.HotkeyToggle and (UIS:IsKeyDown(Enum.KeyCode.LeftShift) or UIS:IsKeyDown(Enum.KeyCode.RightShift)) then
+		-- unload
+		alive = false
+		enabled = false
+		if connAdded then connAdded:Disconnect() end
+		if connRemoving then connRemoving:Disconnect() end
+		for m,_ in pairs(espTracked) do deregister(m) end
+		espTracked = {}; labelToModel = {}
+		highlight:Destroy()
+		billboardHolder:Destroy()
+	end
+end)
+
+-- Final safety: update once after short delay
+task.delay(0.15, function()
+	if alive and enabled then updateTop() end
+end)
