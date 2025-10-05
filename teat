@@ -35,10 +35,11 @@ local CFG = {
 	OutlineTransparency = 0,
 	FillTransparency = 1,
 
-	-- Textanzeige fürs Top-Target
-	TextColor = Color3.fromRGB(255,255,255),
+	-- Textanzeige fürs Top-Target (REGENBOGEN!)
+	RainbowSpeed = 2,                      -- Geschwindigkeit der Regenbogen-Animation
 	TextStrokeColor = Color3.fromRGB(0,0,0),
 	TextStrokeTransparency = 0,
+	TextStrokeThickness = 2.5,             -- Dickerer Stroke für bessere Sichtbarkeit
 	ShowSuffix = " /s",
 
 	-- Name-Suche
@@ -48,10 +49,11 @@ local CFG = {
 	NameValueCandidates = {"Name","DisplayName","AnimalName","PetName","Title","Brainrot","Type","Kind"},
 	NameRefreshInterval = 0.5,             -- wie oft Name refreshen (Owner/Values kommen oft spät)
 
-	-- ===== Player-ESP (nur große Namen) =====
+	-- ===== Player-ESP (kleinere Namen) =====
 	ShowPlayerESP = true,                  -- Player-ESP aktiv
 	PlayerESP_MaxDistance = 600,
 	PlayerESP_StudsOffset = Vector3.new(0, 3.2, 0),
+	PlayerESP_Size = UDim2.new(0, 160, 0, 45),  -- KLEINER!
 	PlayerESP_TextColor = Color3.fromRGB(255,255,255),
 	PlayerESP_StrokeColor = Color3.fromRGB(0,0,0),
 	PlayerESP_StrokeTransparency = 0,
@@ -104,12 +106,27 @@ local function findDescendantByNames(container, classes, names)
 	return nil
 end
 
--- ===================== UI: Brainrot-TopTarget =====================
+-- ===================== Rainbow Color Helper =====================
+local function HSVtoRGB(h, s, v)
+	local c = v * s
+	local x = c * (1 - math.abs((h / 60) % 2 - 1))
+	local m = v - c
+	local r, g, b = 0, 0, 0
+	if h < 60 then r, g, b = c, x, 0
+	elseif h < 120 then r, g, b = x, c, 0
+	elseif h < 180 then r, g, b = 0, c, x
+	elseif h < 240 then r, g, b = 0, x, c
+	elseif h < 300 then r, g, b = x, 0, c
+	else r, g, b = c, 0, x end
+	return Color3.new(r + m, g + m, b + m)
+end
+
+-- ===================== UI: Brainrot-TopTarget (REGENBOGEN!) =====================
 local billboardHolder = Instance.new("BillboardGui")
 billboardHolder.Name = "BrainrotESP_Label"
 billboardHolder.AlwaysOnTop = true
-billboardHolder.Size = UDim2.new(0,260,0,80)
-billboardHolder.StudsOffset = Vector3.new(0,3.5,0)
+billboardHolder.Size = UDim2.new(0, 320, 0, 100)  -- GRÖßER für bessere Sichtbarkeit!
+billboardHolder.StudsOffset = Vector3.new(0, 3.5, 0)
 billboardHolder.MaxDistance = CFG.MaxBillboardDistance
 billboardHolder.Enabled = false
 billboardHolder.Parent = LocalPlayer:WaitForChild("PlayerGui")
@@ -119,14 +136,19 @@ textLabel.BackgroundTransparency = 1
 textLabel.Size = UDim2.new(1,0,1,0)
 textLabel.TextScaled = true
 textLabel.Font = Enum.Font.SourceSansBold
-textLabel.TextColor3 = CFG.TextColor
+textLabel.TextColor3 = Color3.fromRGB(255,255,255)  -- wird durch Regenbogen überschrieben
 textLabel.TextStrokeColor3 = CFG.TextStrokeColor
 textLabel.TextStrokeTransparency = CFG.TextStrokeTransparency
-textLabel.TextXAlignment = Enum.TextXAlignment.Center
-textLabel.TextYAlignment = Enum.TextYAlignment.Center
 textLabel.RichText = true
 textLabel.Text = ""
 textLabel.Parent = billboardHolder
+
+-- REGENBOGEN-ANIMATION (RenderStepped)
+local rainbowHue = 0
+local rainbowConn = RunService.RenderStepped:Connect(function(dt)
+	rainbowHue = (rainbowHue + dt * 60 * (CFG.RainbowSpeed or 2)) % 360
+	textLabel.TextColor3 = HSVtoRGB(rainbowHue, 1, 1)
+end)
 
 local highlight = Instance.new("Highlight")
 highlight.Name = "BrainrotESP_Highlight"
@@ -496,6 +518,7 @@ local connRemoving = WORLD.DescendantRemoving:Connect(function(inst)
 end)
 
 -- Name-Refresh (Owner/Values kommen oft später)
+nameRefreshAccum = 0
 nameRefreshConn = RunService.Heartbeat:Connect(function(dt)
 	if not enabled or not currentTopModel then return end
 	nameRefreshAccum += dt
@@ -507,7 +530,7 @@ nameRefreshConn = RunService.Heartbeat:Connect(function(dt)
 	setBillboard(ad, nameText, d.value)
 end)
 
--- ===================== Player-ESP (nur große Namen) =====================
+-- ===================== Player-ESP (kleinere Namen) =====================
 local playerESP = {} -- [Player] = {gui=BillboardGui, label=TextLabel, conns={...}}
 
 local function playerDisplayName(plr)
@@ -542,7 +565,7 @@ local function createPlayerESP(plr)
 	gui.Name = "BrainrotESP_Player_"..plr.UserId
 	gui.AlwaysOnTop = true
 	gui.MaxDistance = CFG.PlayerESP_MaxDistance or 600
-	gui.Size = UDim2.new(0, 240, 0, 70)
+	gui.Size = CFG.PlayerESP_Size or UDim2.new(0, 160, 0, 45)  -- KLEINER!
 	gui.StudsOffset = CFG.PlayerESP_StudsOffset or Vector3.new(0, 3.2, 0)
 	gui.Enabled = enabled
 	gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
@@ -594,6 +617,7 @@ UIS.InputBegan:Connect(function(input, gp)
 			if connAdded then connAdded:Disconnect() end
 			if connRemoving then connRemoving:Disconnect() end
 			if nameRefreshConn then nameRefreshConn:Disconnect() end
+			if rainbowConn then rainbowConn:Disconnect() end  -- REGENBOGEN stoppen
 			for m,_ in pairs(espTracked) do deregister(m) end
 			espTracked = {}; labelToModel = {}
 			-- Beam cleanup
