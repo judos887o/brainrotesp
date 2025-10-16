@@ -1,5 +1,6 @@
 -- Brainrot + Player ESP (autostart-safe, /s-only, rainbow pet name + money, small player names)
 -- Toggle: F6, Unload: Shift+F6
+-- >> ULTRA-SCHÖNE NOTIFICATION + INSTANT SHOW <<
 
 pcall(function()
 	if not game:IsLoaded() then game.Loaded:Wait() end
@@ -8,24 +9,25 @@ end)
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 local WORLD = workspace
 
 -- ===================== Config =====================
 local CFG = {
 	-- Plots/Brainrot-ESP
 	RootCandidates = {"Plots"},
-	LabelNameAny = {"generation"},         -- TextLabel-Name für Geld/s
+	LabelNameAny = {"generation"},
 	MaxBillboardDistance = 10000,
 
 	-- Anzeige (Top-Target)
-	ShowNameAbove = true,                  -- Name oberhalb vom Geld/s
-	ShowOwnerIfNoName = true,              -- Owner anzeigen, falls kein Namenslabel
-	HideNameIfUnknown = true,              -- wenn Name unbekannt -> obere Zeile weglassen
+	ShowNameAbove = true,
+	ShowOwnerIfNoName = true,
+	HideNameIfUnknown = false,
 	ShowSuffix = " /s",
 
 	-- Rainbow für Pet/Brainrot-Name + Money
-	PetNameRainbow = true,                 -- Rainbow-Animation für Name + Geld
-	PetRainbowSpeed = 0.5,                 -- Hue-Umdrehungen pro Sekunde (0.5 = 2s pro Runde)
+	PetNameRainbow = true,
+	PetRainbowSpeed = 0.5,
 
 	-- Beam (Linie) zum Top-Target
 	ShowBeam = true,
@@ -34,7 +36,7 @@ local CFG = {
 	BeamTransparency = 0,
 
 	-- Toggle/Unload
-	HotkeyToggle = Enum.KeyCode.F6,        -- F6 toggelt alles (Brainrot + Player-ESP)
+	HotkeyToggle = Enum.KeyCode.F6,
 
 	-- Highlight fürs Top-Target
 	HighlightColor = Color3.fromRGB(255,255,255),
@@ -46,27 +48,347 @@ local CFG = {
 	TextStrokeColor = Color3.fromRGB(0,0,0),
 	TextStrokeTransparency = 0,
 
-	-- Name-Suche
-	NameLabelCandidates = {"name","title","animalname","displayname","petname"},
+	-- Name-Suche (ULTRA-STRICT)
+	RarityBlacklist = {
+		"common", "uncommon", "rare", "epic", "legendary", "mythic", "exotic", "ultimate",
+		"gold", "silver", "bronze", "platinum", "diamond", "rainbow", "shiny", "exclusive",
+		"limited", "seasonal", "event", "secret", "hidden", "premium", "vip", "deluxe",
+		"basic", "standard", "advanced", "master", "godly", "divine", "celestial", "immortal",
+		"normal", "special", "super", "ultra", "mega", "hyper", "omega"
+	},
+	
+	TechnicalBlacklist = {
+		"stolen", "label", "text", "textlabel", "frame", "gui", "billboard", "overhead",
+		"name", "title", "display", "info", "stats", "stat", "details", "description",
+		"amount", "total", "current", "max", "min", "count", "number", "value",
+		"status", "state", "mode", "type", "category", "class", "id", "uid",
+		"enabled", "disabled", "active", "inactive", "visible", "hidden",
+		"true", "false", "yes", "no", "on", "off", "none", "null", "nil",
+		"new", "old", "temp", "temporary", "test", "debug", "dev", "admin"
+	},
+	
+	NameLabelBlacklist = {"generation", "gen", "money", "cash", "value", "amount", "price", "cost", "rarity", "tier", "level", "lvl", "balance", "coins", "gems"},
+	
+	ValidNameLabelNames = {
+		"petname", "animalname", "displayname", "name", "title", 
+		"brainrot", "pet", "animal", "creature", "beast"
+	},
+	
 	OwnerValueCandidates = {"Owner","PlotOwner","TycoonOwner"},
 	OwnerIdCandidates    = {"OwnerId","UserId"},
 	NameValueCandidates = {"Name","DisplayName","AnimalName","PetName","Title","Brainrot","Type","Kind"},
-	NameRefreshInterval = 0.5,             -- wie oft Name refreshen (Owner/Values kommen oft spät)
+	
+	-- Aggressive Name-Loading
+	NameSearchRetries = 10,
+	NameSearchDelay = 0.15,
+	NameRefreshInterval = 0.5,
 
-	-- ===== Player-ESP (nur große Namen, aber kleiner als vorher) =====
-	ShowPlayerESP = true,                  -- Player-ESP aktiv
+	-- ===== Player-ESP =====
+	ShowPlayerESP = true,
 	PlayerESP_MaxDistance = 600,
 	PlayerESP_StudsOffset = Vector3.new(0, 3.2, 0),
 	PlayerESP_TextColor = Color3.fromRGB(255,255,255),
 	PlayerESP_StrokeColor = Color3.fromRGB(0,0,0),
 	PlayerESP_StrokeTransparency = 0,
 	PlayerESP_Font = Enum.Font.SourceSansBold,
-	PlayerESP_IncludeLocal = false,        -- eigenen Namen anzeigen? (false = nur andere Spieler)
-	PlayerESP_SizePixels = Vector2.new(200, 38), -- hier kleiner gemacht (vorher ~70px)
+	PlayerESP_IncludeLocal = false,
+	PlayerESP_SizePixels = Vector2.new(200, 38),
+
+	-- Notification
+	NotificationDuration = 5,
+	
+	-- Stabilität
+	InitialLoadDelay = 2.5,
+	AdorneeRetryAttempts = 10,
+	AdorneeRetryDelay = 0.12,
 }
 -- ==================================================
 
 local LocalPlayer = Players.LocalPlayer
+
+-- ===================== ULTRA-SCHÖNE Notification =====================
+local function createNotification()
+	local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+	
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = "BrainrotESP_Notification"
+	screenGui.ResetOnSpawn = false
+	screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	screenGui.Parent = playerGui
+
+	-- Container (für Animation)
+	local container = Instance.new("Frame")
+	container.Name = "Container"
+	container.Size = UDim2.new(0, 500, 0, 110)
+	container.Position = UDim2.new(0.5, 0, 0, -120)
+	container.AnchorPoint = Vector2.new(0.5, 0)
+	container.BackgroundTransparency = 1
+	container.Visible = false
+	container.Parent = screenGui
+
+	-- Main Frame (mit Gradient-Effekt)
+	local mainFrame = Instance.new("Frame")
+	mainFrame.Name = "MainFrame"
+	mainFrame.Size = UDim2.new(1, 0, 1, 0)
+	mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+	mainFrame.BorderSizePixel = 0
+	mainFrame.BackgroundTransparency = 0
+	mainFrame.Parent = container
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 16)
+	corner.Parent = mainFrame
+
+	-- Gradient Overlay
+	local gradient = Instance.new("UIGradient")
+	gradient.Color = ColorSequence.new{
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(25, 25, 30)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(15, 15, 20))
+	}
+	gradient.Rotation = 45
+	gradient.Parent = mainFrame
+
+	-- Outer Glow (Shadow)
+	local shadow = Instance.new("ImageLabel")
+	shadow.Name = "Shadow"
+	shadow.Size = UDim2.new(1, 40, 1, 40)
+	shadow.Position = UDim2.new(0.5, 0, 0.5, 0)
+	shadow.AnchorPoint = Vector2.new(0.5, 0.5)
+	shadow.BackgroundTransparency = 1
+	shadow.Image = "rbxassetid://5554236805"
+	shadow.ImageColor3 = Color3.fromRGB(0, 0, 0)
+	shadow.ImageTransparency = 0.5
+	shadow.ScaleType = Enum.ScaleType.Slice
+	shadow.SliceCenter = Rect.new(23, 23, 277, 277)
+	shadow.ZIndex = -1
+	shadow.Parent = mainFrame
+
+	-- Rainbow Accent Bar (oben, dicker)
+	local accentBar = Instance.new("Frame")
+	accentBar.Name = "AccentBar"
+	accentBar.Size = UDim2.new(1, 0, 0, 4)
+	accentBar.Position = UDim2.new(0, 0, 0, 0)
+	accentBar.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+	accentBar.BorderSizePixel = 0
+	accentBar.ZIndex = 2
+	accentBar.Parent = mainFrame
+
+	local accentCorner = Instance.new("UICorner")
+	accentCorner.CornerRadius = UDim.new(0, 16)
+	accentCorner.Parent = accentBar
+
+	-- Icon (Crown/Trophy)
+	local iconFrame = Instance.new("Frame")
+	iconFrame.Name = "IconFrame"
+	iconFrame.Size = UDim2.new(0, 70, 0, 70)
+	iconFrame.Position = UDim2.new(0, 15, 0.5, 0)
+	iconFrame.AnchorPoint = Vector2.new(0, 0.5)
+	iconFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+	iconFrame.BorderSizePixel = 0
+	iconFrame.Parent = mainFrame
+
+	local iconCorner = Instance.new("UICorner")
+	iconCorner.CornerRadius = UDim.new(0, 12)
+	iconCorner.Parent = iconFrame
+
+	local iconStroke = Instance.new("UIStroke")
+	iconStroke.Color = Color3.fromRGB(255, 215, 0)
+	iconStroke.Thickness = 2
+	iconStroke.Transparency = 0.3
+	iconStroke.Parent = iconFrame
+
+	local iconLabel = Instance.new("TextLabel")
+	iconLabel.Size = UDim2.new(1, 0, 1, 0)
+	iconLabel.BackgroundTransparency = 1
+	iconLabel.Text = "👑"
+	iconLabel.Font = Enum.Font.GothamBold
+	iconLabel.TextSize = 38
+	iconLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
+	iconLabel.Parent = iconFrame
+
+	-- "SCHMECKT HUB" Badge (rechts oben, kleiner)
+	local badge = Instance.new("Frame")
+	badge.Name = "Badge"
+	badge.Size = UDim2.new(0, 120, 0, 22)
+	badge.Position = UDim2.new(1, -10, 0, 10)
+	badge.AnchorPoint = Vector2.new(1, 0)
+	badge.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+	badge.BorderSizePixel = 0
+	badge.Parent = mainFrame
+
+	local badgeCorner = Instance.new("UICorner")
+	badgeCorner.CornerRadius = UDim.new(0, 8)
+	badgeCorner.Parent = badge
+
+	local badgeLabel = Instance.new("TextLabel")
+	badgeLabel.Size = UDim2.new(1, -8, 1, 0)
+	badgeLabel.Position = UDim2.new(0, 4, 0, 0)
+	badgeLabel.BackgroundTransparency = 1
+	badgeLabel.Text = "SCHMECKT HUB"
+	badgeLabel.Font = Enum.Font.GothamBold
+	badgeLabel.TextSize = 10
+	badgeLabel.TextColor3 = Color3.fromRGB(200, 200, 210)
+	badgeLabel.TextXAlignment = Enum.TextXAlignment.Center
+	badgeLabel.Parent = badge
+
+	-- Title Label ("NEW BEST BRAINROT")
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Name = "TitleLabel"
+	titleLabel.Size = UDim2.new(0, 380, 0, 25)
+	titleLabel.Position = UDim2.new(0, 95, 0, 20)
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Text = "🔥 NEW BEST BRAINROT"
+	titleLabel.Font = Enum.Font.GothamBold
+	titleLabel.TextSize = 14
+	titleLabel.TextColor3 = Color3.fromRGB(200, 200, 210)
+	titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+	titleLabel.TextTransparency = 0.3
+	titleLabel.Parent = mainFrame
+
+	-- Pet Name Label (groß, fett)
+	local petNameLabel = Instance.new("TextLabel")
+	petNameLabel.Name = "PetNameLabel"
+	petNameLabel.Size = UDim2.new(0, 380, 0, 45)
+	petNameLabel.Position = UDim2.new(0, 95, 0, 42)
+	petNameLabel.BackgroundTransparency = 1
+	petNameLabel.Text = "Loading..."
+	petNameLabel.Font = Enum.Font.GothamBlack
+	petNameLabel.TextSize = 26
+	petNameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	petNameLabel.TextXAlignment = Enum.TextXAlignment.Left
+	petNameLabel.TextWrapped = true
+	petNameLabel.TextScaled = false
+	petNameLabel.Parent = mainFrame
+
+	-- Sound
+	local sound = Instance.new("Sound")
+	sound.Name = "NotificationSound"
+	sound.SoundId = "rbxassetid://3398620867"
+	sound.Volume = 0.6
+	sound.Parent = screenGui
+
+	-- Rainbow Animation für Accent Bar + Icon Border
+	local rainbowConn
+	local function startRainbow()
+		local t0 = os.clock()
+		rainbowConn = RunService.RenderStepped:Connect(function()
+			local t = os.clock() - t0
+			local hue = (t * 0.4) % 1
+			local color = Color3.fromHSV(hue, 0.85, 1)
+			accentBar.BackgroundColor3 = color
+			iconStroke.Color = color
+		end)
+	end
+
+	-- Show Animation
+	local currentTween
+	local function show(bestName)
+		if currentTween and currentTween.PlaybackState == Enum.PlaybackState.Playing then
+			currentTween:Cancel()
+		end
+
+		if not bestName or bestName == "" or bestName == "Unknown" then
+			return
+		end
+
+		-- Set Text
+		petNameLabel.Text = bestName
+
+		sound:Play()
+
+		if rainbowConn then rainbowConn:Disconnect(); rainbowConn = nil end
+		startRainbow()
+
+		-- Reset positions/transparency
+		container.Visible = true
+		container.Position = UDim2.new(0.5, 0, 0, -120)
+		mainFrame.BackgroundTransparency = 1
+		shadow.ImageTransparency = 1
+		accentBar.BackgroundTransparency = 1
+		iconFrame.BackgroundTransparency = 1
+		iconLabel.TextTransparency = 1
+		iconStroke.Transparency = 1
+		badge.BackgroundTransparency = 1
+		badgeLabel.TextTransparency = 1
+		titleLabel.TextTransparency = 1
+		petNameLabel.TextTransparency = 1
+
+		-- Slide In + Fade In
+		local slideInfo = TweenInfo.new(0.7, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		local slideIn = TweenService:Create(container, slideInfo, { Position = UDim2.new(0.5, 0, 0, 30) })
+		
+		local fadeInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		local fadeFrame = TweenService:Create(mainFrame, fadeInfo, {BackgroundTransparency = 0})
+		local fadeShadow = TweenService:Create(shadow, fadeInfo, {ImageTransparency = 0.5})
+		local fadeAccent = TweenService:Create(accentBar, fadeInfo, {BackgroundTransparency = 0})
+		local fadeIconBG = TweenService:Create(iconFrame, fadeInfo, {BackgroundTransparency = 0})
+		local fadeIconText = TweenService:Create(iconLabel, fadeInfo, {TextTransparency = 0})
+		local fadeIconStroke = TweenService:Create(iconStroke, fadeInfo, {Transparency = 0.3})
+		local fadeBadgeBG = TweenService:Create(badge, fadeInfo, {BackgroundTransparency = 0})
+		local fadeBadgeText = TweenService:Create(badgeLabel, fadeInfo, {TextTransparency = 0})
+		local fadeTitle = TweenService:Create(titleLabel, fadeInfo, {TextTransparency = 0.3})
+		local fadePetName = TweenService:Create(petNameLabel, fadeInfo, {TextTransparency = 0})
+
+		slideIn:Play()
+		fadeFrame:Play()
+		fadeShadow:Play()
+		fadeAccent:Play()
+		fadeIconBG:Play()
+		fadeIconText:Play()
+		fadeIconStroke:Play()
+		fadeBadgeBG:Play()
+		fadeBadgeText:Play()
+		fadeTitle:Play()
+		fadePetName:Play()
+
+		-- Hold + Fade Out
+		currentTween = task.delay(CFG.NotificationDuration, function()
+			local outInfo = TweenInfo.new(0.6, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+			local slideOut = TweenService:Create(container, outInfo, { Position = UDim2.new(0.5, 0, 0, -120) })
+			
+			local fadeOutInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+			local fadeOutFrame = TweenService:Create(mainFrame, fadeOutInfo, {BackgroundTransparency = 1})
+			local fadeOutShadow = TweenService:Create(shadow, fadeOutInfo, {ImageTransparency = 1})
+			local fadeOutAccent = TweenService:Create(accentBar, fadeOutInfo, {BackgroundTransparency = 1})
+			local fadeOutIconBG = TweenService:Create(iconFrame, fadeOutInfo, {BackgroundTransparency = 1})
+			local fadeOutIconText = TweenService:Create(iconLabel, fadeOutInfo, {TextTransparency = 1})
+			local fadeOutIconStroke = TweenService:Create(iconStroke, fadeOutInfo, {Transparency = 1})
+			local fadeOutBadgeBG = TweenService:Create(badge, fadeOutInfo, {BackgroundTransparency = 1})
+			local fadeOutBadgeText = TweenService:Create(badgeLabel, fadeOutInfo, {TextTransparency = 1})
+			local fadeOutTitle = TweenService:Create(titleLabel, fadeOutInfo, {TextTransparency = 1})
+			local fadeOutPetName = TweenService:Create(petNameLabel, fadeOutInfo, {TextTransparency = 1})
+
+			slideOut:Play()
+			fadeOutFrame:Play()
+			fadeOutShadow:Play()
+			fadeOutAccent:Play()
+			fadeOutIconBG:Play()
+			fadeOutIconText:Play()
+			fadeOutIconStroke:Play()
+			fadeOutBadgeBG:Play()
+			fadeOutBadgeText:Play()
+			fadeOutTitle:Play()
+			fadeOutPetName:Play()
+
+			slideOut.Completed:Wait()
+			
+			if rainbowConn then rainbowConn:Disconnect(); rainbowConn = nil end
+			
+			container.Visible = false
+			currentTween = nil
+		end)
+	end
+
+	return {
+		show = show,
+		destroy = function()
+			if rainbowConn then rainbowConn:Disconnect() end
+			screenGui:Destroy()
+		end
+	}
+end
+
+local notification = createNotification()
 
 -- ===================== Helpers =====================
 local function lower(s) return tostring(s or ""):lower() end
@@ -129,7 +451,6 @@ billboardHolder.MaxDistance = CFG.MaxBillboardDistance
 billboardHolder.Enabled = false
 billboardHolder.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
--- Zwei Labels: Name (oben, Rainbow), Value (unten, Rainbow)
 local nameLabel = Instance.new("TextLabel")
 nameLabel.BackgroundTransparency = 1
 nameLabel.Size = UDim2.new(1, 0, 0.55, 0)
@@ -159,7 +480,6 @@ valueLabel.TextYAlignment = Enum.TextYAlignment.Center
 valueLabel.Text = ""
 valueLabel.Parent = billboardHolder
 
--- Rainbow-Animation (für Name UND GenerateMoney)
 local rainbowConn
 local function startRainbow()
 	if not CFG.PetNameRainbow then return end
@@ -169,17 +489,12 @@ local function startRainbow()
 		local t = os.clock() - t0
 		local hue = (t * (CFG.PetRainbowSpeed or 0.5)) % 1
 		local c = Color3.fromHSV(hue, 1, 1)
-		-- Name Rainbow (wenn sichtbar)
-		if nameLabel.Visible then
-			nameLabel.TextColor3 = c
-		end
-		-- GenerateMoney ESP auch Rainbow
+		if nameLabel.Visible then nameLabel.TextColor3 = c end
 		valueLabel.TextColor3 = c
 	end)
 end
 local function stopRainbow()
-	if rainbowConn then rainbowConn:Disconnect() rainbowConn = nil end
-	-- Farben zurücksetzen (falls Rainbow aus)
+	if rainbowConn then rainbowConn:Disconnect(); rainbowConn = nil end
 	if not CFG.PetNameRainbow then
 		nameLabel.TextColor3 = CFG.TextColor
 		valueLabel.TextColor3 = CFG.TextColor
@@ -195,47 +510,22 @@ local function ensureCharacterAttachment()
 	if not hrp then return end
 	if not a0 or not a0.Parent or a0.Parent ~= hrp then
 		if a0 then pcall(function() a0:Destroy() end) end
-		a0 = Instance.new("Attachment")
-		a0.Name = "BrainrotESP_A0"
-		a0.Parent = hrp
+		a0 = Instance.new("Attachment"); a0.Name = "BrainrotESP_A0"; a0.Parent = hrp
 	end
 end
 local function ensureBeamObjects()
 	if not CFG.ShowBeam then return end
 	ensureCharacterAttachment()
 	if not anchorPart or not anchorPart.Parent then
-		anchorPart = Instance.new("Part")
-		anchorPart.Name = "BrainrotESP_TargetAnchor"
-		anchorPart.Size = Vector3.new(0.2, 0.2, 0.2)
-		anchorPart.Transparency = 1
-		anchorPart.Anchored = true
-		anchorPart.CanCollide = false
-		anchorPart.CanQuery = false
-		anchorPart.CanTouch = false
-		anchorPart.Locked = true
-		anchorPart.Parent = WORLD
+		anchorPart = Instance.new("Part"); anchorPart.Name = "BrainrotESP_TargetAnchor"; anchorPart.Size = Vector3.new(0.2, 0.2, 0.2); anchorPart.Transparency = 1; anchorPart.Anchored = true; anchorPart.CanCollide = false; anchorPart.CanQuery = false; anchorPart.CanTouch = false; anchorPart.Locked = true; anchorPart.Parent = WORLD
 	end
 	if not a1 or not a1.Parent then
-		a1 = Instance.new("Attachment")
-		a1.Name = "BrainrotESP_A1"
-		a1.Parent = anchorPart
+		a1 = Instance.new("Attachment"); a1.Name = "BrainrotESP_A1"; a1.Parent = anchorPart
 	end
 	if not beam or not beam.Parent then
-		beam = Instance.new("Beam")
-		beam.Name = "BrainrotESP_Beam"
-		beam.Segments = 10
-		beam.Width0 = CFG.BeamWidth or 0.24
-		beam.Width1 = CFG.BeamWidth or 0.24
-		beam.Transparency = NumberSequence.new(CFG.BeamTransparency or 0)
-		beam.Color = ColorSequence.new(CFG.BeamColor or Color3.fromRGB(255, 0, 0))
-		beam.LightInfluence = 0
-		beam.Enabled = false
-		beam.Attachment0 = a0
-		beam.Attachment1 = a1
-		beam.Parent = WORLD
+		beam = Instance.new("Beam"); beam.Name = "BrainrotESP_Beam"; beam.Segments = 10; beam.Width0 = CFG.BeamWidth or 0.24; beam.Width1 = CFG.BeamWidth or 0.24; beam.Transparency = NumberSequence.new(CFG.BeamTransparency or 0); beam.Color = ColorSequence.new(CFG.BeamColor or Color3.fromRGB(255, 0, 0)); beam.LightInfluence = 0; beam.Enabled = false; beam.Attachment0 = a0; beam.Attachment1 = a1; beam.Parent = WORLD
 	else
-		beam.Attachment0 = a0
-		beam.Attachment1 = a1
+		beam.Attachment0 = a0; beam.Attachment1 = a1
 	end
 end
 local function startBeamFollowLoop()
@@ -243,8 +533,7 @@ local function startBeamFollowLoop()
 	beamUpdateConn = RunService.RenderStepped:Connect(function()
 		if not beam or not CFG.ShowBeam then return end
 		if beamTargetPart and beamTargetPart.Parent then
-			local cf = (beamTargetPart.CFrame or CFrame.new(beamTargetPart.Position))
-			anchorPart.CFrame = cf
+			anchorPart.CFrame = (beamTargetPart.CFrame or CFrame.new(beamTargetPart.Position))
 			beam.Enabled = true
 		else
 			beam.Enabled = false
@@ -252,7 +541,7 @@ local function startBeamFollowLoop()
 	end)
 end
 local function stopBeamFollowLoop()
-	if beamUpdateConn then beamUpdateConn:Disconnect() beamUpdateConn = nil end
+	if beamUpdateConn then beamUpdateConn:Disconnect(); beamUpdateConn = nil end
 	if beam then beam.Enabled = false end
 end
 local function setBeamTarget(part)
@@ -261,164 +550,340 @@ local function setBeamTarget(part)
 	beamTargetPart = part
 	if part then startBeamFollowLoop() else stopBeamFollowLoop() end
 end
-LocalPlayer.CharacterAdded:Connect(function()
-	task.defer(function()
-		ensureCharacterAttachment()
-		ensureBeamObjects()
-		if beam then beam.Enabled = false end
-	end)
-end)
+LocalPlayer.CharacterAdded:Connect(function() task.defer(function() ensureCharacterAttachment(); ensureBeamObjects(); if beam then beam.Enabled = false end end) end)
 LocalPlayer.CharacterRemoving:Connect(function() stopBeamFollowLoop(); if beam then beam.Enabled = false end end)
 
 -- ===================== Zahlen-/Suffix-Parsing (/s only) =====================
 local function smartTonum(numStr)
 	if not numStr or numStr == "" then return nil end
-	local hasComma = numStr:find(",")
-	local hasDot = numStr:find("%.")
+	local hasComma, hasDot = numStr:find(","), numStr:find("%.")
 	if hasComma and hasDot then
-		if numStr:find(",%d%d%d") and numStr:find("%.%d%d") then
-			numStr = numStr:gsub(",", "")
-		elseif numStr:find("%.%d%d%d") and numStr:find(",%d%d") then
-			numStr = numStr:gsub("%.", ""):gsub(",", ".")
-		else
-			numStr = numStr:gsub(",", "")
-		end
-	else
-		numStr = numStr:gsub(",", ".")
-	end
+		if numStr:find(",%d%d%d") and numStr:find("%.%d%d") then numStr = numStr:gsub(",", "")
+		elseif numStr:find("%.%d%d%d") and numStr:find(",%d%d") then numStr = numStr:gsub("%.", ""):gsub(",", ".")
+		else numStr = numStr:gsub(",", "") end
+	else numStr = numStr:gsub(",", ".") end
 	return tonumber(numStr)
 end
-local SUFFIX_MAP = {
-	k=1e3, tsd=1e3, thousand=1e3, tausend=1e3,
-	m=1e6, mio=1e6, million=1e6, millionen=1e6,
-	b=1e9, bn=1e9, mrd=1e9, milliarde=1e9, milliarden=1e9,
-	t=1e12, tn=1e12, bio=1e12, billion=1e12, billionen=1e12,
-	qa=1e15, qd=1e15, brd=1e15, billiarde=1e15, billiarden=1e15,
-	qn=1e18, qi=1e18, tr=1e18, tri=1e18, trillion=1e18, trillionen=1e18,
-	sx=1e21, sp=1e24, oc=1e27, no=1e30, de=1e33,
-}
+local SUFFIX_MAP = {k=1e3,tsd=1e3,m=1e6,mio=1e6,b=1e9,bn=1e9,mrd=1e9,t=1e12,tn=1e12,qa=1e15,qd=1e15,qn=1e18,qi=1e18,sx=1e21,sp=1e24,oc=1e27,no=1e30,de=1e33}
 local function applySuffix(numStr, suf)
-	local base = smartTonum(numStr)
-	if not base then return nil end
+	local base = smartTonum(numStr); if not base then return nil end
 	local mul = SUFFIX_MAP[lower(suf or "")] or 1
 	return base * mul
 end
 local function parsePerSecond(text)
 	if not text then return nil end
-	local s = tostring(text):gsub("[%s\194\160]+"," "):gsub("[$€£¥₽₩]", "")
-	local sLower = lower(s)
+	local s = tostring(text):gsub("[%s\194\160]+"," "):gsub("[$€£¥₽₩]", ""); local sLower = lower(s)
 	local val
-	for num, suf in sLower:gmatch("([%-%d%.,]+)%s*([%a]*)%s*/%s*s") do
-		val = applySuffix(num, suf) or val
-	end
+	for num, suf in sLower:gmatch("([%-%d%.,]+)%s*([%a]*)%s*/%s*s") do val = applySuffix(num, suf) or val end
 	if val then return val end
 	for num, suf in sLower:gmatch("([%-%d%.,]+)%s*([%a]*)%s*per%s*second") do val = applySuffix(num, suf) or val end
-	for num, suf in sLower:gmatch("([%-%d%.,]+)%s*([%a]*)%s*per%s*sekunde") do val = applySuffix(num, suf) or val end
-	for num, suf in sLower:gmatch("([%-%d%.,]+)%s*([%a]*)%s*pro%s*sekunde") do val = applySuffix(num, suf) or val end
 	return val
 end
 local function shortFormat(n)
-	if n == nil then return "?" end
-	local sign = n < 0 and "-" or ""
-	n = math.abs(n)
-	local units = {"","K","M","B","T","Qa","Qi","Sx","Sp","Oc","No","De"}
-	local i = 1
+	if n == nil then return "?" end; local sign = n < 0 and "-" or ""; n = math.abs(n)
+	local units = {"","K","M","B","T","Qa","Qi","Sx","Sp","Oc","No","De"}; local i = 1
 	while n >= 1000 and i < #units do n = n / 1000; i += 1 end
 	if i == 1 then return sign .. tostring(math.floor(n+0.5)) end
 	return string.format("%s%.2f %s", sign, n, units[i])
 end
 
--- ===================== Brainrot: Model/Overhead/Name =====================
-local function findModelAndOverhead(label)
-	local bb = label:FindFirstAncestorWhichIsA("BillboardGui")
-	local m = label:FindFirstAncestorOfClass("Model")
-	return m, bb
-end
-local function getAdorneeFor(model, overhead)
-	if overhead and overhead.Parent and overhead.Parent:IsA("Attachment") then
-		local parent = overhead.Parent.Parent
-		if parent and parent:IsA("BasePart") then return parent end
+-- ===================== ULTRA-STRICT NAME VALIDATION =====================
+local nameCache = {}
+
+local function isRarity(text)
+	if not text or text == "" then return true end
+	local t = lower(text)
+	for _, rarity in ipairs(CFG.RarityBlacklist) do
+		if t == lower(rarity) then return true end
 	end
-	return firstBasePart(model)
+	return false
 end
-local function getNameFromOverhead(overhead)
-	if not overhead then return nil end
-	local wanted = {}
-	for _,n in ipairs(CFG.NameLabelCandidates) do wanted[lower(n)] = true end
-	local best
-	for _,d in ipairs(overhead:GetDescendants()) do
-		if d:IsA("TextLabel") and wanted[lower(d.Name)] then
-			local t = tostring(d.Text or ""); if #t == 0 then continue end
-			local tl = lower(t)
-			if not (tl:find("cash") or tl:find("coins") or tl:find("money") or tl:find("income")
-				or tl:find("offline") or tl:find("online") or tl:find("/%s*s")
-				or tl:find("per%s*second") or tl:find("pro%s*sekunde") or tl:find("[%$€£¥]")) then
-				if not best or #t > #best then best = t end
+
+local function isTechnical(text)
+	if not text or text == "" then return true end
+	local t = lower(text)
+	for _, tech in ipairs(CFG.TechnicalBlacklist) do
+		if t == lower(tech) then return true end
+	end
+	return false
+end
+
+local function isMoneyValue(text)
+	if not text or text == "" then return false end
+	local t = text:gsub("%s", "")
+	if t:find("[$€£¥₽₩]") then return true end
+	if t:match("^[%d%.,]+[kmbtqsonde]+$") then return true end
+	if t:match("^[%d%.,]+") and t:match("[kmbtqsonde]") then return true end
+	return false
+end
+
+local function isValidLabelName(labelName)
+	if not labelName then return false end
+	local ln = lower(labelName)
+	for _, validName in ipairs(CFG.ValidNameLabelNames) do
+		if ln:find(lower(validName)) then
+			return true
+		end
+	end
+	return false
+end
+
+local function looksLikeName(text)
+	if not text or #text < 3 then return false end
+	local hasUpper = text:match("[A-Z]")
+	local isAllLower = text == lower(text)
+	if isAllLower and not text:find("%s") then
+		return false
+	end
+	return true
+end
+
+local function isValidName(text, labelName)
+	if not text or text == "" then return false end
+	local t = lower(text)
+	
+	if labelName and not isValidLabelName(labelName) then
+		return false
+	end
+	
+	if not looksLikeName(text) then
+		return false
+	end
+	
+	if isTechnical(text) then
+		return false
+	end
+	
+	if isRarity(text) then 
+		return false 
+	end
+	
+	if isMoneyValue(text) then
+		return false
+	end
+	
+	for _, bad in ipairs(CFG.NameLabelBlacklist) do
+		if t == lower(bad) then 
+			return false 
+		end
+	end
+	
+	if t:match("^[%d%.,]+$") then 
+		return false 
+	end
+	
+	if t:find("/%s*s") or t:find("per%s*second") then 
+		return false 
+	end
+	
+	if not text:match("[a-zA-Z]") then
+		return false
+	end
+	
+	return true
+end
+
+local function findModelAndOverhead(label)
+	return label:FindFirstAncestorOfClass("Model"), label:FindFirstAncestorWhichIsA("BillboardGui")
+end
+
+local function getAdorneeFor(model, overhead)
+	for attempt = 1, CFG.AdorneeRetryAttempts do
+		if overhead and overhead.Parent and overhead.Parent:IsA("Attachment") and overhead.Parent.Parent and overhead.Parent.Parent:IsA("BasePart") then
+			return overhead.Parent.Parent
+		end
+		
+		local part = firstBasePart(model)
+		if part then
+			return part
+		end
+		
+		if attempt < CFG.AdorneeRetryAttempts then
+			task.wait(CFG.AdorneeRetryDelay)
+		end
+	end
+	
+	return nil
+end
+
+local function findGenerationLabel(container)
+	if not container then return nil end
+	for _, desc in ipairs(container:GetDescendants()) do
+		if desc:IsA("TextLabel") then
+			local nm = lower(desc.Name)
+			for _, cand in ipairs(CFG.LabelNameAny) do
+				if nm == lower(cand) then
+					return desc
+				end
 			end
 		end
 	end
-	return best
+	return nil
 end
-local function getOwnerName(plotRoot)
-	if not plotRoot then return nil end
-	local ownerObj = findDescendantByNames(plotRoot, {"ObjectValue"}, CFG.OwnerValueCandidates)
-	if ownerObj and ownerObj.Value and ownerObj.Value:IsA("Player") then
-		return ownerObj.Value.DisplayName or ownerObj.Value.Name
-	end
-	for _,idName in ipairs(CFG.OwnerIdCandidates) do
-		local idVal = plotRoot:FindFirstChild(idName, true)
-		if idVal and idVal:IsA("IntValue") then
-			local ok, nameOrErr = pcall(function()
-				return Players:GetNameFromUserIdAsync(idVal.Value)
-			end)
-			if ok and nameOrErr and #nameOrErr > 0 then return nameOrErr end
+
+local function resolveNameAggressive(model, overhead)
+	if not CFG.ShowNameAbove then return nil end
+	
+	local foundNames = {}
+	local generationLabel = overhead and findGenerationLabel(overhead)
+	local genYPos = (generationLabel and generationLabel.AbsolutePosition) and generationLabel.AbsolutePosition.Y or 999999
+	
+	if overhead then
+		for _, desc in ipairs(overhead:GetDescendants()) do
+			if desc:IsA("TextLabel") then
+				local text = tostring(desc.Text or "")
+				local labelName = desc.Name
+				
+				if isValidName(text, labelName) then
+					local yPos = 999999
+					pcall(function()
+						yPos = desc.AbsolutePosition.Y
+					end)
+					
+					local priority = 1
+					if yPos < genYPos then
+						priority = 1
+					else
+						priority = 3
+					end
+					
+					table.insert(foundNames, {
+						priority = priority or 1,
+						name = text,
+						source = "overhead_label:" .. labelName,
+						yPos = yPos or 999999
+					})
+				end
+			end
 		end
 	end
-	return nil
-end
-local function getNameFromPlotData(plotRoot)
-	if not plotRoot then return nil end
-	local strV = findDescendantByNames(plotRoot, {"StringValue"}, CFG.NameValueCandidates)
-	if strV and strV.Value and #strV.Value > 0 then return strV.Value end
-	for _,attr in ipairs(CFG.NameValueCandidates) do
-		local v = plotRoot:GetAttribute(attr)
-		if v and tostring(v) ~= "" then return tostring(v) end
+	
+	if model then
+		for _, desc in ipairs(model:GetDescendants()) do
+			if desc:IsA("TextLabel") and desc.Parent:IsA("BillboardGui") then
+				local text = tostring(desc.Text or "")
+				local labelName = desc.Name
+				
+				if isValidName(text, labelName) then
+					local isGenerationLabel = false
+					for _, genName in ipairs(CFG.LabelNameAny) do
+						if lower(labelName) == lower(genName) then
+							isGenerationLabel = true
+							break
+						end
+					end
+					
+					if not isGenerationLabel then
+						table.insert(foundNames, {priority = 2, name = text, source = "model_billboard:" .. labelName, yPos = 999999})
+					end
+				end
+			end
+		end
 	end
-	return nil
-end
-local function resolveName(model, overhead)
-	if not CFG.ShowNameAbove then return nil end
-	local nameText = getNameFromOverhead(overhead)
-	if nameText and #nameText > 0 then return nameText end
+	
 	local plotRoot = findPlotRootDynamic(model or overhead)
-	if CFG.ShowOwnerIfNoName then
-		local ownerName = getOwnerName(plotRoot)
-		if ownerName and #ownerName > 0 then return ownerName end
+	if CFG.ShowOwnerIfNoName and plotRoot then
+		local ownerObj = findDescendantByNames(plotRoot, {"ObjectValue"}, CFG.OwnerValueCandidates)
+		if ownerObj and ownerObj.Value and ownerObj.Value:IsA("Player") then
+			local name = ownerObj.Value.DisplayName or ownerObj.Value.Name
+			table.insert(foundNames, {priority = 4, name = name, source = "owner_object", yPos = 999999})
+		end
+		
+		for _, idName in ipairs(CFG.OwnerIdCandidates) do
+			local idVal = plotRoot:FindFirstChild(idName, true)
+			if idVal and idVal:IsA("IntValue") then
+				local ok, nameOrErr = pcall(Players.GetNameFromUserIdAsync, Players, idVal.Value)
+				if ok and nameOrErr and #nameOrErr > 0 then
+					table.insert(foundNames, {priority = 5, name = nameOrErr, source = "owner_userid", yPos = 999999})
+				end
+			end
+		end
 	end
-	local plotName = getNameFromPlotData(plotRoot)
-	if plotName and #plotName > 0 then return plotName end
-	if CFG.HideNameIfUnknown then return nil end
-	return (model and model.Name) or nil
+	
+	if plotRoot then
+		local strV = findDescendantByNames(plotRoot, {"StringValue"}, CFG.NameValueCandidates)
+		if strV and strV.Value and isValidName(strV.Value, strV.Name) then
+			table.insert(foundNames, {priority = 6, name = strV.Value, source = "stringvalue:" .. strV.Name, yPos = 999999})
+		end
+	end
+	
+	if model and model.Name and isValidName(model.Name, "ModelName") then
+		table.insert(foundNames, {priority = 7, name = model.Name, source = "model_name", yPos = 999999})
+	end
+	
+	table.sort(foundNames, function(a, b)
+		local aPrio = a.priority or 999
+		local bPrio = b.priority or 999
+		
+		if aPrio == bPrio then
+			local aY = a.yPos or 999999
+			local bY = b.yPos or 999999
+			return aY < bY
+		end
+		
+		return aPrio < bPrio
+	end)
+	
+	if #foundNames > 0 then
+		return foundNames[1].name
+	end
+	
+	return nil
+end
+
+local function resolveName(model, overhead)
+	local cached = nameCache[model]
+	if cached and (tick() - cached.timestamp) < 3 then
+		return cached.name
+	end
+	
+	for attempt = 1, CFG.NameSearchRetries do
+		local name = resolveNameAggressive(model, overhead)
+		
+		if name then
+			nameCache[model] = {name = name, timestamp = tick()}
+			return name
+		end
+		
+		if attempt < CFG.NameSearchRetries then
+			task.wait(CFG.NameSearchDelay)
+		end
+	end
+	
+	return nil
 end
 
 -- ===================== Brainrot ESP Core =====================
 local enabled, alive = true, true
-local espTracked = {}   -- [Model] = {label=TextLabel, value=number, overhead=BillboardGui?, connText, connLblAnc, connModelAnc}
-local labelToModel = {} -- [TextLabel] = Model
+local espTracked = {}
+local labelToModel = {}
 local currentTopModel, currentTopOverhead = nil, nil
-local nameRefreshAccum, nameRefreshConn
+local nameRefreshAccum = 0
+local nameRefreshConn
+local lastNotifiedModel = nil
+local initialLoadComplete = false
+
+local function deregister(model)
+	local d = espTracked[model]
+	if not d then return end
+	if d.connText then d.connText:Disconnect() end
+	if d.connLblAnc then d.connLblAnc:Disconnect() end
+	if d.connModelAnc then d.connModelAnc:Disconnect() end
+	labelToModel[d.label] = nil
+	espTracked[model] = nil
+	nameCache[model] = nil
+end
 
 local function setBillboard(adornee, nmText, value)
 	billboardHolder.Adornee = adornee
 	billboardHolder.Enabled = (billboardHolder.Adornee ~= nil) and enabled
+	
 	if not billboardHolder.Enabled then return end
-
+	
 	if CFG.ShowNameAbove and nmText and #nmText > 0 then
 		nameLabel.Visible = true
 		nameLabel.Text = nmText
-		-- Rainbow steuern
 		if CFG.PetNameRainbow then startRainbow() else stopRainbow() end
-
 		valueLabel.Position = UDim2.new(0, 0, 0.55, 0)
 		valueLabel.Size = UDim2.new(1, 0, 0.45, 0)
 	else
@@ -427,9 +892,8 @@ local function setBillboard(adornee, nmText, value)
 		valueLabel.Position = UDim2.new(0, 0, 0, 0)
 		valueLabel.Size = UDim2.new(1, 0, 1, 0)
 	end
-
-	local vtxt = (value ~= nil and shortFormat(value) or "?")
-	valueLabel.Text = vtxt .. (CFG.ShowSuffix or "")
+	
+	valueLabel.Text = (value ~= nil and shortFormat(value) or "?") .. (CFG.ShowSuffix or "")
 end
 
 local function setESP(model, value, overhead)
@@ -440,44 +904,70 @@ local function setESP(model, value, overhead)
 		setBeamTarget(nil)
 		return
 	end
+	
 	if not model or not model.Parent then
-		currentTopModel = nil
-		highlight.Enabled = false
-		billboardHolder.Enabled = false
-		setBeamTarget(nil)
+		if currentTopModel == model then
+			currentTopModel = nil
+			highlight.Enabled = false
+			billboardHolder.Enabled = false
+			setBeamTarget(nil)
+			lastNotifiedModel = nil
+		end
 		return
 	end
+	
 	if currentTopModel ~= model then
-		currentTopModel = model
-		currentTopOverhead = overhead
-		highlight.Adornee = model
-		highlight.Enabled = true
+		currentTopModel, currentTopOverhead = model, overhead
+		highlight.Adornee, highlight.Enabled = model, true
+		
+		-- NEU: SOFORT ohne Delay (task.wait entfernt!)
+		if initialLoadComplete and model and model ~= lastNotifiedModel then
+			lastNotifiedModel = model
+			task.spawn(function()
+				local finalName = resolveName(model, overhead)
+				notification.show(finalName)
+			end)
+		end
 	end
-	local adornee = getAdorneeFor(model, overhead)
-	setBillboard(adornee, resolveName(model, overhead), value)
-	setBeamTarget(adornee)
+	
+	task.spawn(function()
+		local adornee = getAdorneeFor(model, overhead)
+		if adornee then
+			local name = resolveName(model, overhead)
+			setBillboard(adornee, name, value)
+			setBeamTarget(adornee)
+		else
+			billboardHolder.Enabled = false
+			setBeamTarget(nil)
+		end
+	end)
 end
 
 local function updateTop()
 	local bestModel, bestValue, bestOverhead = nil, -math.huge, nil
+	local toRemove = {}
+
 	for m, d in pairs(espTracked) do
-		if m and m.Parent and d.label and d.label.Parent and (d.value ~= nil) then
-			if d.value > bestValue then
+		if m and m.Parent and d.label and d.label.Parent then
+			if d.value and d.value > bestValue then
 				bestModel, bestValue, bestOverhead = m, d.value, d.overhead
 			end
+		else
+			table.insert(toRemove, m)
 		end
 	end
-	if bestModel then setESP(bestModel, bestValue, bestOverhead) else setESP(nil, nil, nil) end
-end
 
-local function deregister(model)
-	local d = espTracked[model]
-	if not d then return end
-	if d.connText then d.connText:Disconnect() end
-	if d.connLblAnc then d.connLblAnc:Disconnect() end
-	if d.connModelAnc then d.connModelAnc:Disconnect() end
-	labelToModel[d.label] = nil
-	espTracked[model] = nil
+	if #toRemove > 0 then
+		for _, modelToRemove in ipairs(toRemove) do
+			deregister(modelToRemove)
+		end
+	end
+
+	if bestModel then
+		setESP(bestModel, bestValue, bestOverhead)
+	else
+		setESP(nil, nil, nil)
+	end
 end
 
 local function isTargetLabel(inst)
@@ -487,127 +977,115 @@ local function isTargetLabel(inst)
 		if nm == lower(cand) then return true end
 	end
 	local t = lower(inst.Text or "")
-	if t:find("/%s*s") or t:find("per%s*second") or t:find("per%s*sekunde") or t:find("pro%s*sekunde") then
-		return true
-	end
-	return false
+	return t:find("/%s*s") or t:find("per%s*second")
 end
 
 local function registerLabel(label)
-	if not alive then return end
-	if not isTargetLabel(label) then return end
-	if not findPlotRootDynamic(label) then return end
-
+	if not alive or not isTargetLabel(label) or not findPlotRootDynamic(label) then return end
+	
 	local model, overhead = findModelAndOverhead(label)
-	if not model then return end
-	if labelToModel[label] then return end
+	if not model or labelToModel[label] then return end
 	if espTracked[model] then deregister(model) end
-
-	local data = {
-		label = label,
-		value = parsePerSecond(label.Text),
-		overhead = overhead,
-	}
+	
+	local data = {label = label, value = parsePerSecond(label.Text) or 0, overhead = overhead}
+	
 	data.connText = label:GetPropertyChangedSignal("Text"):Connect(function()
-		data.value = parsePerSecond(label.Text)
-		if enabled then
-			if currentTopModel == model then
-				setBillboard(getAdorneeFor(model, data.overhead), resolveName(model, data.overhead), data.value)
-			end
-			updateTop()
-		end
+		if not label.Parent then deregister(model); return end
+		data.value = parsePerSecond(label.Text) or 0
+		if enabled then updateTop() end
 	end)
+	
 	data.connLblAnc = label.AncestryChanged:Connect(function()
 		if not findPlotRootDynamic(label) then
 			deregister(model)
 			if enabled then updateTop() end
 		end
 	end)
+	
 	data.connModelAnc = model.AncestryChanged:Connect(function()
 		if not findPlotRootDynamic(model) then
 			deregister(model)
 			if enabled then updateTop() end
 		end
 	end)
-
-	espTracked[model] = data
-	labelToModel[label] = model
-	if enabled then updateTop() end
+	
+	espTracked[model], labelToModel[label] = data, model
+	if enabled and initialLoadComplete then updateTop() end
 end
 
--- workspace-weit, damit frühes Executen klappt
 for _,inst in ipairs(WORLD:GetDescendants()) do
-	if inst:IsA("TextLabel") then registerLabel(inst) end
+	if inst:IsA("TextLabel") then
+		registerLabel(inst)
+	end
 end
+
 local connAdded = WORLD.DescendantAdded:Connect(function(inst)
-	if not alive then return end
-	if inst:IsA("TextLabel") then registerLabel(inst) end
+	if alive and inst:IsA("TextLabel") then
+		registerLabel(inst)
+	end
 end)
+
 local connRemoving = WORLD.DescendantRemoving:Connect(function(inst)
 	if not alive then return end
-	if labelToModel[inst] then
-		local m = labelToModel[inst]
+	local m = labelToModel[inst] or (inst:IsA("Model") and espTracked[inst] and inst)
+	if m then
 		deregister(m)
-		if enabled then updateTop() end
-	elseif inst:IsA("Model") and espTracked[inst] then
-		deregister(inst)
 		if enabled then updateTop() end
 	end
 end)
 
--- Name-Refresh (Owner/Values kommen oft später)
-local nameRefreshAccum = 0
-local nameRefreshConn = RunService.Heartbeat:Connect(function(dt)
+nameRefreshConn = RunService.Heartbeat:Connect(function(dt)
 	if not enabled or not currentTopModel then return end
+	
 	nameRefreshAccum += dt
 	if nameRefreshAccum < (CFG.NameRefreshInterval or 0.5) then return end
 	nameRefreshAccum = 0
-	local d = espTracked[currentTopModel]; if not d then return end
-	local ad = getAdorneeFor(currentTopModel, d.overhead)
-	local nameText = resolveName(currentTopModel, d.overhead)
-	setBillboard(ad, nameText, d.value)
+	
+	local d = espTracked[currentTopModel]
+	if not d then return end
+	
+	local cached = nameCache[currentTopModel]
+	if cached and (tick() - cached.timestamp) >= 3 then
+		nameCache[currentTopModel] = nil
+	end
+	
+	task.spawn(function()
+		local ad = getAdorneeFor(currentTopModel, d.overhead)
+		if ad then
+			local name = resolveName(currentTopModel, d.overhead)
+			setBillboard(ad, name, d.value)
+		end
+	end)
 end)
 
--- ===================== Player-ESP (nur Namen, kleiner) =====================
-local playerESP = {} -- [Player] = {gui=BillboardGui, label=TextLabel, conns={...}}
-
-local function playerDisplayName(plr)
-	return (plr.DisplayName ~= "" and plr.DisplayName) or plr.Name
-end
-
+-- ===================== Player-ESP =====================
+local playerESP = {}
+local function playerDisplayName(plr) return (plr.DisplayName ~= "" and plr.DisplayName) or plr.Name end
 local function setPlayerESPVisible(val)
 	for _,d in pairs(playerESP) do
-		if d.gui then d.gui.Enabled = val and (d.gui.Adornee ~= nil) end
+		if d.gui then
+			d.gui.Enabled = val and (d.gui.Adornee ~= nil)
+		end
 	end
 end
-
 local function setPlayerAdornee(plr, ch)
-	local d = playerESP[plr]; if not d or not d.gui then return end
-	local head = ch and ch:FindFirstChild("Head")
-	local hrp  = ch and ch:FindFirstChild("HumanoidRootPart")
-	d.gui.Adornee = head or hrp
+	local d = playerESP[plr]
+	if not d or not d.gui then return end
+	d.gui.Adornee = ch and (ch:FindFirstChild("Head") or ch:FindFirstChild("HumanoidRootPart"))
 	d.gui.Enabled = enabled and CFG.ShowPlayerESP and (d.gui.Adornee ~= nil)
 end
-
-local function updatePlayerText(plr)
-	local d = playerESP[plr]; if not d or not d.label then return end
-	d.label.Text = playerDisplayName(plr)
-end
-
 local function createPlayerESP(plr)
-	if not CFG.ShowPlayerESP then return end
-	if not CFG.PlayerESP_IncludeLocal and plr == LocalPlayer then return end
-	if playerESP[plr] then return end
-
+	if not CFG.ShowPlayerESP or (not CFG.PlayerESP_IncludeLocal and plr == LocalPlayer) or playerESP[plr] then return end
+	
 	local gui = Instance.new("BillboardGui")
 	gui.Name = "BrainrotESP_Player_"..plr.UserId
 	gui.AlwaysOnTop = true
 	gui.MaxDistance = CFG.PlayerESP_MaxDistance or 600
-	gui.Size = UDim2.new(0, CFG.PlayerESP_SizePixels.X, 0, CFG.PlayerESP_SizePixels.Y) -- kleiner
+	gui.Size = UDim2.new(0, CFG.PlayerESP_SizePixels.X, 0, CFG.PlayerESP_SizePixels.Y)
 	gui.StudsOffset = CFG.PlayerESP_StudsOffset or Vector3.new(0, 3.2, 0)
 	gui.Enabled = enabled
 	gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-
+	
 	local label = Instance.new("TextLabel")
 	label.BackgroundTransparency = 1
 	label.Size = UDim2.new(1,0,1,0)
@@ -616,27 +1094,24 @@ local function createPlayerESP(plr)
 	label.TextColor3 = CFG.PlayerESP_TextColor or Color3.fromRGB(255,255,255)
 	label.TextStrokeColor3 = CFG.PlayerESP_StrokeColor or Color3.fromRGB(0,0,0)
 	label.TextStrokeTransparency = CFG.PlayerESP_StrokeTransparency or 0
-	label.TextXAlignment = Enum.TextXAlignment.Center
-	label.TextYAlignment = Enum.TextYAlignment.Center
 	label.Text = playerDisplayName(plr)
 	label.Parent = gui
-
-	playerESP[plr] = {gui = gui, label = label, conns = {}}
-	local d = playerESP[plr]
-
-	local function onCharAdded(ch)
-		task.defer(function() setPlayerAdornee(plr, ch) end)
-	end
+	
+	local d = {gui = gui, label = label, conns = {}}
+	playerESP[plr] = d
+	
+	local function onCharAdded(ch) task.defer(setPlayerAdornee, plr, ch) end
 	if plr.Character then onCharAdded(plr.Character) end
+	
 	table.insert(d.conns, plr.CharacterAdded:Connect(onCharAdded))
 	table.insert(d.conns, plr.CharacterRemoving:Connect(function() setPlayerAdornee(plr, nil) end))
-	table.insert(d.conns, plr:GetPropertyChangedSignal("DisplayName"):Connect(function() updatePlayerText(plr) end))
+	table.insert(d.conns, plr:GetPropertyChangedSignal("DisplayName"):Connect(function() label.Text = playerDisplayName(plr) end))
 end
-
 local function removePlayerESP(plr)
-	local d = playerESP[plr]; if not d then return end
-	for _,c in ipairs(d.conns) do pcall(function() c:Disconnect() end) end
-	if d.gui then pcall(function() d.gui:Destroy() end) end
+	local d = playerESP[plr]
+	if not d then return end
+	for _,c in ipairs(d.conns) do pcall(c.Disconnect, c) end
+	if d.gui then pcall(d.gui.Destroy, d.gui) end
 	playerESP[plr] = nil
 end
 
@@ -644,31 +1119,29 @@ for _,plr in ipairs(Players:GetPlayers()) do createPlayerESP(plr) end
 Players.PlayerAdded:Connect(createPlayerESP)
 Players.PlayerRemoving:Connect(removePlayerESP)
 
--- ===================== Hotkeys (F6 toggle, Shift+F6 unload) =====================
+-- ===================== Hotkeys =====================
 UIS.InputBegan:Connect(function(input, gp)
 	if gp or not alive then return end
 	if input.KeyCode == CFG.HotkeyToggle then
-		local shiftDown = UIS:IsKeyDown(Enum.KeyCode.LeftShift) or UIS:IsKeyDown(Enum.KeyCode.RightShift)
-		if shiftDown then
-			-- unload
+		if UIS:IsKeyDown(Enum.KeyCode.LeftShift) or UIS:IsKeyDown(Enum.KeyCode.RightShift) then
 			alive = false
 			enabled = false
 			if connAdded then connAdded:Disconnect() end
 			if connRemoving then connRemoving:Disconnect() end
 			if nameRefreshConn then nameRefreshConn:Disconnect() end
 			for m,_ in pairs(espTracked) do deregister(m) end
-			espTracked = {}; labelToModel = {}
+			espTracked, labelToModel, nameCache = {}, {}, {}
 			stopBeamFollowLoop()
-			if beam then pcall(function() beam:Destroy() end) end
-			if a0 then pcall(function() a0:Destroy() end) end
-			if a1 then pcall(function() a1:Destroy() end) end
-			if anchorPart then pcall(function() anchorPart:Destroy() end) end
+			if beam then pcall(beam.Destroy, beam) end
+			if a0 then pcall(a0.Destroy, a0) end
+			if a1 then pcall(a1.Destroy, a1) end
+			if anchorPart then pcall(anchorPart.Destroy, anchorPart) end
 			for plr,_ in pairs(playerESP) do removePlayerESP(plr) end
 			stopRainbow()
 			highlight:Destroy()
 			billboardHolder:Destroy()
+			notification.destroy()
 		else
-			-- toggle an/aus
 			enabled = not enabled
 			if not enabled then
 				highlight.Enabled = false
@@ -685,9 +1158,24 @@ UIS.InputBegan:Connect(function(input, gp)
 	end
 end)
 
--- Initial safety
-task.delay(0.3, function()
-	if alive and enabled then updateTop() end
-	ensureCharacterAttachment()
-	ensureBeamObjects()
+-- ===================== Initial Load =====================
+task.delay(CFG.InitialLoadDelay, function()
+	if not alive then return end
+	
+	initialLoadComplete = true
+	
+	if enabled then
+		ensureCharacterAttachment()
+		ensureBeamObjects()
+		updateTop()
+		
+		-- NEU: Initial auch SOFORT ohne Delay!
+		if currentTopModel then
+			task.spawn(function()
+				local finalName = resolveName(currentTopModel, currentTopOverhead)
+				lastNotifiedModel = currentTopModel
+				notification.show(finalName)
+			end)
+		end
+	end
 end)
